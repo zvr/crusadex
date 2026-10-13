@@ -1,0 +1,49 @@
+fix = false
+indent-width = 4
+line-length = 150
+output-format = "full"
+# output-format = "grouped"
+preview = true
+required-version = ">=0.17"
+show-fixes = true
+
+[format]
+docstring-code-format = false
+indent-style = "space"
+line-ending = "native"
+preview = true
+quote-style = "double"
+skip-magic-trailing-comma = false
+
+[lint]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+fixable = ["ALL"]
+ignore = [ "AIR", "ANN", "D", "NPY", "PD", "COM812" ]
+logger-objects = ["cfg.log"]
+preview = true
+select = [ "ALL" ]
+unfixable = []
+
+[lint.per-file-ignores]
+"crusa" = ["BLE001", "DTZ011", "FBT001", "PERF203", "PLR2004", "T201"]
+"crusadex" = [
+    "if-else-block-instead-of-if-exp",
+    "print",
+    "raise-vanilla-args",
+    "raw-string-in-exception",
+
+]
+
+[lint.isort]
+case-sensitive = true
+force-sort-within-sections = false
+from-first = false
+lines-between-types = 0
+split-on-trailing-comma = false
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.pylint]
+max-branches = 35
+max-statements = 65

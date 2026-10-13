@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+
+# A quick-n-dirty solver for fill-in crossword puzzles.
+# Copyright (C) 2026 Alexios Zavras
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import argparse
+import pathlib
+import sys
+from collections import Counter, defaultdict
+
+EMPTY = "_"
+
+
+def is_cell(ch):
+    return ch == EMPTY or ch.isalpha()
+
+
+def parse_puzzle(text):
+    lines = text.splitlines()
+    grid_lines = []
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    while i < len(lines) and lines[i].strip():
+        grid_lines.append(lines[i].rstrip("\n"))
+        i += 1
+    words = [ln.strip().lower() for ln in lines[i:] if ln.strip()]
+    if not grid_lines:
+        raise ValueError("no grid found")
+    if not words:
+        raise ValueError("no words found")
+    width = max(len(ln) for ln in grid_lines)
+    grid = [list(ln.ljust(width)) for ln in grid_lines]
+    for row in grid:
+        for c, ch in enumerate(row):
+            if ch.isalpha():
+                row[c] = ch.lower()
+    return grid, words
+
+
+def find_slots(grid):
+    height, width = len(grid), len(grid[0])
+    slots = []
+
+    def cell(r, c):
+        return 0 <= r < height and 0 <= c < width and is_cell(grid[r][c])
+
+    for r in range(height):
+        for c in range(width):
+            if not cell(r, c):
+                continue
+            if not cell(r, c - 1) and cell(r, c + 1):
+                cells = []
+                cc = c
+                while cell(r, cc):
+                    cells.append((r, cc))
+                    cc += 1
+                slots.append((f"across at ({r + 1},{c + 1})", cells))
+            if not cell(r - 1, c) and cell(r + 1, c):
+                cells = []
+                rr = r
+                while cell(rr, c):
+                    cells.append((rr, c))
+                    rr += 1
+                slots.append((f"down at ({r + 1},{c + 1})", cells))
+    return slots
+
+
+def render(grid):
+    return "\n".join("".join(row).rstrip() for row in grid)
+
+
+class Solver:
+    def __init__(self, grid, words, *, progress=False, out=sys.stdout):
+        self.grid = grid
+        self.slots = find_slots(grid)
+        self.remaining = Counter(words)
+        self.by_length = defaultdict(set)
+        for w in words:
+            self.by_length[len(w)].add(w)
+        self.progress = progress
+        self.out = out
+        self.filled = set()
+        self.step = 0
+
+    def log(self, msg, *, show_board=False):
+        if self.progress:
+            print(msg, file=self.out)
+            if show_board:
+                print(render(self.grid), file=self.out)
+                print(file=self.out)
+
+    def fits(self, cells, word):
+        for (r, c), ch in zip(cells, word, strict=True):
+            g = self.grid[r][c]
+            if g not in {EMPTY, ch}:
+                return False
+        return True
+
+    def candidates(self, cells):
+        return sorted(
+            w
+            for w in self.by_length.get(len(cells), ())
+            if self.remaining[w] > 0 and self.fits(cells, w)
+        )
+
+    def check_counts(self):
+        need = Counter(len(cells) for _, cells in self.slots)
+        have = Counter(
+            {k: sum(self.remaining[w] for w in v) for k, v in self.by_length.items()}
+        )
+        if need != have:
+            self.log(
+                f"Warning: slot lengths {dict(need)} "
+                f"do not match word lengths {dict(have)}"
+            )
+
+    def pre_filled(self):
+        for idx, (name, cells) in enumerate(self.slots):
+            word = "".join(self.grid[r][c] for r, c in cells)
+            if EMPTY not in word and self.remaining[word] > 0:
+                self.remaining[word] -= 1
+                self.filled.add(idx)
+                self.log(f"Pre-filled {name}: {word}")
+
+    def solve(self):
+        self.check_counts()
+        self.pre_filled()
+        self.log("Initial board:", show_board=True)
+        return self._search()
+
+    def _search(self):
+        best = None
+        for idx, (_, cells) in enumerate(self.slots):
+            if idx in self.filled:
+                continue
+            cands = self.candidates(cells)
+            if best is None or len(cands) < len(best[1]):
+                best = (idx, cands)
+                if not cands:
+                    break
+        if best is None:
+            return True
+        idx, cands = best
+        name, cells = self.slots[idx]
+        if not cands:
+            self.log(f"No word fits {name}; backtracking")
+            return False
+        for word in cands:
+            changed = [(r, c) for (r, c) in cells if self.grid[r][c] == EMPTY]
+            for (r, c), ch in zip(cells, word, strict=True):
+                self.grid[r][c] = ch
+            self.remaining[word] -= 1
+            self.filled.add(idx)
+            self.step += 1
+            alt = f" ({len(cands)} options)" if len(cands) > 1 else ""
+            self.log(f"Step {self.step}: place '{word}' {name}{alt}", show_board=True)
+            if self._search():
+                return True
+            self.filled.discard(idx)
+            self.remaining[word] += 1
+            for r, c in changed:
+                self.grid[r][c] = EMPTY
+            self.log(f"Undo '{word}' {name}")
+        return False
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Solve fill-in crossword puzzles.")
+    parser.add_argument("file", help="puzzle file ('-' for stdin)")
+    parser.add_argument(
+        "-p", "--progress", action="store_true", help="print reasoning step by step"
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        if args.file == "-":
+            text = sys.stdin.read()
+        else:
+            text = pathlib.Path(args.file).read_text(encoding="utf-8")
+        grid, words = parse_puzzle(text)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+
+    solver = Solver(grid, words, progress=args.progress)
+    if solver.solve():
+        if args.progress:
+            print("Solution:")
+        print(render(solver.grid))
+        return 0
+    print("No solution found.", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
